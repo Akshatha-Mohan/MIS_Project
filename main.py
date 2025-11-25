@@ -13,7 +13,7 @@ from PIL import Image
 from system_matrix import build_system_matrix
 import os
 import glob
-
+import matplotlib.pyplot as plt
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =============================================================================
@@ -27,13 +27,18 @@ H_torch = torch.from_numpy(H).to(device, dtype=torch.float32)
 # SVD and pseudoinverse
 U, S, Vt = np.linalg.svd(H, full_matrices=False)
 
-K = 170  # Regularization: keep top 170 singular values
+K = 30  # Regularization: keep top 30 singular values
+#sort the singular values big to small
+
+
 S_inv = np.zeros_like(S)
 S_inv[:K] = 1.0 / S[:K]
 
 H_pinv = (Vt.T * S_inv) @ U.T
 H_pinv = torch.from_numpy(H_pinv).to(device, dtype=torch.float32)
-
+#PLOT S
+plt.plot(S)
+plt.show()
 print(f"✓ H shape: {H.shape}, H_pinv shape: {H_pinv.shape}")
 
 # =============================================================================
@@ -142,3 +147,67 @@ print("  signal_absent/low/")
 print("  signal_absent/medium/")
 print("  signal_absent/high/")
 print("  signal_absent/very_high/")
+
+# =============================================================================
+# Visualization: Display original image along with reconstructions at different noise levels
+# =============================================================================
+
+print("\nCreating visualization of original and reconstructed images at different noise levels...")
+
+# Load original image
+image_idx = 0
+original_img_path = os.path.join('data', 'signal_present', f'sp_{image_idx:03d}.png')
+original_img = None
+if os.path.exists(original_img_path):
+    original_img = np.array(Image.open(original_img_path))
+    print(f"Loaded original image: {original_img_path}")
+else:
+    print(f"Warning: Original image {original_img_path} not found")
+
+# Load one image from each noise level (use the first image)
+noise_level_names = ['low', 'medium', 'high', 'very_high']
+images = {}
+
+for noise_name in noise_level_names:
+    img_path = os.path.join('signal_present', noise_name, f'sp_{image_idx:03d}.png')
+    if os.path.exists(img_path):
+        img = Image.open(img_path)
+        images[noise_name] = np.array(img)
+    else:
+        print(f"Warning: {img_path} not found")
+
+# Create a 1x5 subplot (original + 4 noise levels)
+fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+axes = axes.flatten()
+
+# Plot original image
+if original_img is not None:
+    axes[0].imshow(original_img, cmap='gray')
+    axes[0].set_title('Original Image', fontsize=12, fontweight='bold')
+else:
+    axes[0].axis('off')
+    axes[0].text(0.5, 0.5, 'Original\nImage not found', 
+                ha='center', va='center', transform=axes[0].transAxes)
+axes[0].axis('off')
+
+# Plot reconstructed images at different noise levels
+for idx, noise_name in enumerate(noise_level_names):
+    ax = axes[idx + 1]
+    if noise_name in images:
+        ax.imshow(images[noise_name], cmap='gray')
+        # Get the noise level value for display
+        noise_value = noise_levels.get(noise_name, 'N/A')
+        ax.set_title(f'{noise_name.upper()}\n(Noise: {noise_value})', 
+                     fontsize=11, fontweight='bold')
+    else:
+        ax.axis('off')
+        ax.text(0.5, 0.5, f'{noise_name}\nImage not found', 
+               ha='center', va='center', transform=ax.transAxes)
+    ax.axis('off')
+
+plt.suptitle('Original vs Reconstructed Images at Different Noise Levels', 
+             fontsize=14, fontweight='bold', y=1.02)
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+plt.savefig('reconstructed_images_comparison.png', dpi=150, bbox_inches='tight')
+print("Saved: reconstructed_images_comparison.png")
+plt.show()

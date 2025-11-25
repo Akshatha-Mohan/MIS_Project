@@ -1,81 +1,126 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
+def build_system_matrix(D=2.0, pixel_count=32,
+                        num_detector=32, num_angles=16,
+                        S=20):
+    """
+    Build system matrix H for System 1 with:
+      - FOV: disk of diameter D (centered at 0)
+      - Object: pixel_count x pixel_count pixels (default 32x32)
+      - Detector: num_detector strips per angle (default 32)
+      - Angles: num_angles views (default 16), rotated by k * pi/16
+      - Supersampling: S×S samples per pixel (S=1 → pixel-center only)
 
-def build_system_matrix(D=3.0, N_side=32, N_strips=32, N_angles=16, S=20):
+    Returns:
+      H : (num_angles * num_detector, pixel_count**2) array
+    """
+    radius = D / 2.0
 
-    pixel_size = D / N_side
-    strip_width = D / N_strips
+    pixel_length = D / pixel_count
+    pixel_area   = pixel_length**2
 
-    M = N_strips * N_angles
-    N = N_side * N_side
+    # pixel centers (used only in S=1 case)
+    coords = np.linspace(-radius + pixel_length/2,
+                          radius - pixel_length/2,
+                          pixel_count)
+    x_centers = coords
+    y_centers = coords
 
-    H = np.zeros((M, N))
+    Xc, Yc = np.meshgrid(x_centers, y_centers, indexing='xy')
+
+    # System matrix
+    M = num_angles * num_detector
+    N = pixel_count * pixel_count
+    H = np.zeros((M, N), dtype=float)
+
+    strip_width = D / num_detector
+    thetas = np.arange(num_angles) * (np.pi / 16.0)
 
     # --------------------------------------------
-    # 1. MAKE SAMPLE in each pixel (S×S points)
+    # CASE 1: no supersampling (S = 1)
     # --------------------------------------------
+    if S == 1:
+        circular_fov = (Xc**2 + Yc**2) <= radius**2
+
+        row = 0
+        for theta in thetas:
+            y_det = Xc * np.sin(theta) + Yc * np.cos(theta)
+
+            for m in range(num_detector):
+                y_bottom = -D/2 + m * strip_width
+                y_top    = y_bottom + strip_width
+
+                strip_mask = (y_det > y_bottom) & (y_det <= y_top) & circular_fov
+
+                h_m = np.zeros_like(Xc, dtype=float)
+                h_m[strip_mask] = 1.0
+
+                H[row, :] = (h_m * pixel_area).ravel()
+                row += 1
+
+        return H
+
+    # --------------------------------------------
+    # CASE 2: supersampling (S > 1)
+    # --------------------------------------------
+
+    # Precompute offsets (S×S sample positions in [0,1]×[0,1])
     offsets = []
     for u in range(S):
         for v in range(S):
-            alpha = (u + 0.5) / S
+            alpha = (u + 0.5) / S  # in (0,1)
             beta  = (v + 0.5) / S
             offsets.append((alpha, beta))
-    offsets = np.array(offsets)        # shape (S*S, 2)
+    offsets = np.array(offsets)  # shape (S*S, 2)
 
-    # --------------------------------------------
-    # 2. PRECOMPUTE PIXEL SAMPLE COORDS
-    # --------------------------------------------
+    # Precompute pixel sample positions for all pixels
     pixel_samples_x = np.zeros((N, S*S))
     pixel_samples_y = np.zeros((N, S*S))
 
-    for j in range(N_side):
-        y_min = -D/2 + j * pixel_size
-        for i in range(N_side):
-            x_min = -D/2 + i * pixel_size
-            n = j * N_side + i
+    # pixel edges (lower-left corner)
+    x_edges = np.linspace(-radius, radius - pixel_length, pixel_count)
+    y_edges = np.linspace(-radius, radius - pixel_length, pixel_count)
 
-            # coords of this pixel's samples (object frame)
-            px = x_min + offsets[:, 0] * pixel_size
-            py = y_min + offsets[:, 1] * pixel_size
+    n = 0
+    for j in range(pixel_count):
+        y_min = y_edges[j]
+        for i in range(pixel_count):
+            x_min = x_edges[i]
 
-            pixel_samples_x[n] = px
-            pixel_samples_y[n] = py
+            # sample positions in this pixel
+            px = x_min + offsets[:, 0] * pixel_length
+            py = y_min + offsets[:, 1] * pixel_length
 
-    # --------------------------------------------
-    # 3. MAIN LOOP: only rotates + checks!
-    # --------------------------------------------
-    for a in range(N_angles):
-        angle = a * np.pi / 16
-        cos_t = np.cos(angle)
-        sin_t = np.sin(angle)
+            pixel_samples_x[n, :] = px
+            pixel_samples_y[n, :] = py
+            n += 1
 
-        for s in range(N_strips):
-            y_low  = -D/2 + s * strip_width
-            y_high = y_low + strip_width
-            m = a * N_strips + s
+    row = 0
+    for theta in thetas:
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+
+        for m in range(num_detector):
+            y_bottom = -D/2 + m * strip_width
+            y_top    = y_bottom + strip_width
 
             for n in range(N):
-                # get all samples for this pixel
                 x_obj = pixel_samples_x[n]
                 y_obj = pixel_samples_y[n]
 
-                # rotate to detector frame
-                x_det =  x_obj * cos_t + y_obj * sin_t
-                y_det = -x_obj * sin_t + y_obj * cos_t
+                # rotate samples to detector frame
+                # y_det is along normal to strip
+                y_det = x_obj * np.sin(theta) + y_obj * np.cos(theta)
 
-                # compute fraction in strip
-                inside = (y_det >= y_low) & (y_det < y_high)
-                count  = inside.sum()
-                total  = S * S
+                # enforce disk FOV on samples
+                in_disk = (x_obj**2 + y_obj**2) <= radius**2
 
-                H[m, n] = (count / total) * (pixel_size**2)
+                # which samples fall inside this strip AND inside disk?
+                inside = in_disk & (y_det > y_bottom) & (y_det <= y_top)
+
+                frac = inside.sum() / float(S * S)
+                H[row, n] = frac * pixel_area
+
+            row += 1
 
     return H
-
-
-
-
-
-

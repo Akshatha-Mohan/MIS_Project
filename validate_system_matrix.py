@@ -34,9 +34,9 @@ f = point.flatten()
 # BUILD SYSTEM MATRIX AND FORWARD PROJECT
 # ------------------------------------------------------------
 H = build_system_matrix(D=D,
-                        N_side=N_side,
-                        N_strips=N_strips,
-                        N_angles=N_angles)
+                        pixel_count=N_side,
+                        num_detector=N_strips,
+                        num_angles=N_angles)
 
 g = H @ f                       # shape: (N_angles * N_strips,)
 sinogram = g.reshape(N_angles, N_strips)
