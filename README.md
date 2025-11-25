@@ -1,6 +1,6 @@
 # MIS Project
 
-Medical Imaging System (MIS) project for computed tomography reconstruction.
+MIS project for computed tomography reconstruction.
 
 ## Project Overview
 
